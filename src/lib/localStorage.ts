@@ -1,0 +1,26 @@
+"use client";
+
+export function getFromLocalStorage<T>(key: string, defaultValue: T): T {
+  if (typeof window === "undefined") {
+    return defaultValue;
+  }
+  try {
+    const item = window.localStorage.getItem(key);
+    return item ? (JSON.parse(item) as T) : defaultValue;
+  } catch (error) {
+    console.warn(`Error reading localStorage key "${key}":`, error);
+    return defaultValue;
+  }
+}
+
+export function setToLocalStorage<T>(key: string, value: T): void {
+  if (typeof window === "undefined") {
+    console.warn(`Tried to set localStorage key "${key}" on the server.`);
+    return;
+  }
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Error setting localStorage key "${key}":`, error);
+  }
+}
