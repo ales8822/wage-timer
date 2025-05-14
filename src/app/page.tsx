@@ -8,6 +8,7 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { formatTime, formatCurrency, formatShortTime } from '@/lib/utils';
 import { Play, Square, Pause, RotateCcw } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { calculateShiftEarnings } from '@/lib/wageCalculator';
 
 export default function DashboardPage() {
   const { 
@@ -42,7 +43,7 @@ export default function DashboardPage() {
   
   const baseWageDisplay = formatCurrency(settings.baseWage);
   const currentRateDisplay = formatCurrency(effectiveHourlyRate);
-  const currentPercentageDisplay = calculateShiftEarnings(currentShift as any, settings, true).finalTotalPercentage;
+  const currentPercentageDisplay = status !== 'idle' && currentShift && settings ? calculateShiftEarnings(currentShift as any, settings, true).finalTotalPercentage : 0;
 
 
   return (
