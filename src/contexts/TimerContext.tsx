@@ -3,7 +3,7 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { Shift, BreakRecord, AppSettings } from '@/types'; // AppSettings might not be directly used here but good for context
+import type { Shift, BreakRecord, AppSettings, RateSegment } from '@/types'; // AppSettings might not be directly used here but good for context
 import { useSettings } from './SettingsContext';
 import { useWorkHistory } from './WorkHistoryContext';
 import { calculateShiftEarnings } from '@/lib/wageCalculator';
@@ -87,9 +87,11 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
         endTime: now, // Use current time for live calculation
         breaks: currentShift.breaks || [],
         baseWageAtStart: currentShift.baseWageAtStart || settings.baseWage,
+        // rateSegments are not calculated live for the display, only for history
       };
 
       if (status === 'working' || status === 'on_break') { // Ensure calculation happens if there's an active shift
+        // For live display, we only need totalEarnings and finalEffectiveRate
         const { totalEarnings, finalEffectiveRate } = calculateShiftEarnings(tempShift, settings, true);
         setCurrentEarnings(totalEarnings);
         setEffectiveHourlyRate(finalEffectiveRate);
@@ -105,24 +107,24 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
              totalBreakDurationMs += breakEndTime - breakStartTime;
         }
       });
+      
+      // Also consider scheduled breaks for elapsed time display accuracy if they were implicitly taken
+      // This part of elapsed time calculation might become complex if we want to reflect scheduled breaks *before* a shift ends.
+      // For now, `elapsedWorkTime` is based on manual breaks taken during the live shift.
+      // The `calculateShiftEarnings` function handles all break types (manual and scheduled) for the final earnings.
 
       const grossWorkTimeMs = now - currentShift.startTime;
+      // This is elapsed time shown on timer. For precise "paid time" it should factor all breaks.
+      // The `calculateShiftEarnings` function *does* factor all breaks for actual earnings.
+      // For display, `elapsedWorkTime` can be gross minus *active* manual breaks.
       setElapsedWorkTime(Math.max(0, Math.floor((grossWorkTimeMs - totalBreakDurationMs) / 1000)));
       
-      // Update elapsed break time if currently on break
       if (status === 'on_break') {
         const activeBreak = currentShift.breaks?.find(b => !b.endTime);
         if (activeBreak) {
           setElapsedBreakTime(Math.floor((now - activeBreak.startTime) / 1000));
         }
       } else {
-        // If not on break, sum up completed break durations for display or ensure it's 0 if no active break
-         const currentTotalBreakTimeSeconds = Math.floor(totalBreakDurationMs / 1000);
-         // setElapsedBreakTime(currentTotalBreakTimeSeconds); // This could show total break time for the shift
-         // Or keep it focused on the *current* break's elapsed time, which is 0 if not on break.
-         // For now, if not 'on_break', elapsedBreakTime should represent the current segment, which is 0.
-         // If we want to show total break time for the shift, that's a different state variable.
-         // Let's ensure it resets if not actively on break.
          if (status !== 'on_break') setElapsedBreakTime(0);
       }
     }
@@ -130,10 +132,9 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
 
 
   useEffect(() => {
-    if (isLoading || settingsLoading) return; // Don't start interval if loading
+    if (isLoading || settingsLoading) return; 
 
     if (status === 'working' || status === 'on_break') {
-      // Call immediately to update state correctly after restoration or status change
       calculateCurrentEarningsAndRate();
       const interval = setInterval(() => {
         calculateCurrentEarningsAndRate();
@@ -143,7 +144,6 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     } else {
       if (timerInterval) clearInterval(timerInterval);
       setTimerInterval(null);
-      // If idle, ensure times and earnings are reset if no shift was restored or if it just ended
       if (!currentShift) {
         setElapsedWorkTime(0);
         setElapsedBreakTime(0);
@@ -152,7 +152,7 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, isLoading, settingsLoading, calculateCurrentEarningsAndRate]); // currentShift removed to avoid re-triggering interval on every earnings update
+  }, [status, isLoading, settingsLoading, calculateCurrentEarningsAndRate]); 
 
   const startShift = () => {
     if (status !== 'idle' || isLoading || settingsLoading) return;
@@ -167,31 +167,43 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     setElapsedWorkTime(0);
     setElapsedBreakTime(0);
     setCurrentEarnings(0);
-    // Effective rate will be calculated by the interval
     toast({ title: "Shift Started", description: "Your work shift has begun." });
   };
 
   const endShift = () => {
     if ((status !== 'working' && status !== 'on_break') || !currentShift || !currentShift.startTime || isLoading || settingsLoading) return;
 
-    let finalShift = { ...currentShift } as Shift;
-    finalShift.endTime = Date.now();
-    finalShift.baseWageAtStart = finalShift.baseWageAtStart || settings.baseWage; // Ensure base wage is set
+    let finalShiftProto = { ...currentShift }; // Make a mutable copy
+    finalShiftProto.endTime = Date.now();
+    finalShiftProto.baseWageAtStart = finalShiftProto.baseWageAtStart || settings.baseWage; 
 
-    if (status === 'on_break' && finalShift.breaks.length > 0) {
-      const lastBreak = finalShift.breaks[finalShift.breaks.length - 1];
+    if (status === 'on_break' && finalShiftProto.breaks && finalShiftProto.breaks.length > 0) {
+      const lastBreak = finalShiftProto.breaks[finalShiftProto.breaks.length - 1];
       if (!lastBreak.endTime) {
         lastBreak.endTime = Date.now();
       }
     }
     
-    const { totalEarnings } = calculateShiftEarnings(finalShift, settings, false);
-    finalShift.totalEarnings = totalEarnings;
+    // Ensure all required fields for Shift type are present
+    const shiftForCalc: Shift = {
+        id: finalShiftProto.id || `shift_${Date.now()}_err`,
+        startTime: finalShiftProto.startTime,
+        endTime: finalShiftProto.endTime,
+        breaks: finalShiftProto.breaks || [],
+        baseWageAtStart: finalShiftProto.baseWageAtStart,
+    };
+
+    const { totalEarnings, rateSegments } = calculateShiftEarnings(shiftForCalc, settings, false);
+    
+    const finalShift: Shift = {
+        ...shiftForCalc,
+        totalEarnings: totalEarnings,
+        rateSegments: rateSegments,
+    };
 
     addShift(finalShift);
     setStatus('idle');
-    setCurrentShift(null); // This will trigger localStorage removal
-    // Resetting values immediately, though interval clear also handles some
+    setCurrentShift(null); 
     setElapsedWorkTime(0);
     setElapsedBreakTime(0);
     setCurrentEarnings(0);
@@ -201,29 +213,27 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
 
   const startBreak = () => {
     if (status !== 'working' || !currentShift || isLoading || settingsLoading) return;
-    const newBreak: BreakRecord = { startTime: Date.now(), isScheduled: false };
+    const newBreak: BreakRecord = { startTime: Date.now(), isScheduled: false }; // Manual breaks are not scheduled
     setCurrentShift(prev => ({ ...prev, breaks: [...(prev?.breaks || []), newBreak] }));
     setStatus('on_break');
-    setElapsedBreakTime(0); // Reset current break timer
+    setElapsedBreakTime(0); 
     toast({ title: "Break Started", description: "Enjoy your break!" });
   };
 
   const endBreak = () => {
     if (status !== 'on_break' || !currentShift || !currentShift.breaks?.length || isLoading || settingsLoading) return;
-    const updatedBreaks = currentShift.breaks.map((br, index) => 
-      index === currentShift.breaks!.length - 1 ? { ...br, endTime: Date.now() } : br
+    const updatedBreaks = (currentShift.breaks || []).map((br, index) => 
+      index === (currentShift.breaks || []).length - 1 && !br.endTime ? { ...br, endTime: Date.now() } : br
     );
     setCurrentShift(prev => ({ ...prev, breaks: updatedBreaks }));
     setStatus('working');
-    // Elapsed break time will stop updating for the current segment.
-    // calculateCurrentEarningsAndRate will be called by the main interval effect.
     toast({ title: "Break Ended", description: "Back to work!" });
   };
 
   const resetActiveShift = () => {
     if (status === 'idle' || !currentShift || isLoading || settingsLoading) return;
     setStatus('idle');
-    setCurrentShift(null); // This will trigger localStorage removal
+    setCurrentShift(null); 
     setElapsedWorkTime(0);
     setElapsedBreakTime(0);
     setCurrentEarnings(0);
@@ -244,7 +254,7 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
       startBreak, 
       endBreak,
       resetActiveShift,
-      isLoading: isLoading || settingsLoading, // Overall loading state
+      isLoading: isLoading || settingsLoading, 
     }}>
       {children}
     </TimerContext.Provider>
@@ -258,5 +268,3 @@ export const useTimer = (): TimerContextType => {
   }
   return context;
 };
-
-    

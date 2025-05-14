@@ -35,6 +35,11 @@ export interface BreakRecord {
   isScheduled: boolean; // To differentiate manual vs scheduled breaks
 }
 
+export interface RateSegment {
+  percentage: number;
+  durationSeconds: number;
+}
+
 export interface Shift {
   id:string;
   startTime: number; // timestamp
@@ -42,5 +47,6 @@ export interface Shift {
   breaks: BreakRecord[];
   totalEarnings?: number;
   baseWageAtStart: number;
+  rateSegments?: RateSegment[]; // Breakdown of work by rate
   // Optionally, store effective allowances for review, or recompute on display
 }
