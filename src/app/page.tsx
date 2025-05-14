@@ -1,3 +1,4 @@
+
 "use client";
 
 import { Header } from '@/components/shared/Header';
@@ -8,7 +9,8 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { formatTime, formatCurrency, formatShortTime } from '@/lib/utils';
 import { Play, Square, Pause, RotateCcw } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { calculateShiftEarnings } from '@/lib/wageCalculator';
+import { calculateShiftEarnings } from '@/lib/wageCalculator'; // Ensure this is imported
+import type { Shift } from '@/types'; // Ensure Shift type is imported
 
 export default function DashboardPage() {
   const { 
@@ -22,7 +24,8 @@ export default function DashboardPage() {
     endShift, 
     startBreak, 
     endBreak,
-    resetActiveShift
+    resetActiveShift,
+    isLoading: timerLoading, // Renamed to avoid conflict
   } = useTimer();
   const { settings, isLoading: settingsLoading } = useSettings();
 
@@ -30,12 +33,12 @@ export default function DashboardPage() {
     resetActiveShift();
   };
 
-  if (settingsLoading) {
+  if (settingsLoading || timerLoading) {
     return (
       <div className="flex flex-col min-h-screen">
         <Header />
         <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8 flex items-center justify-center">
-          <p>Loading settings...</p>
+          <p>Loading timer and settings...</p>
         </main>
       </div>
     );
@@ -43,7 +46,20 @@ export default function DashboardPage() {
   
   const baseWageDisplay = formatCurrency(settings.baseWage);
   const currentRateDisplay = formatCurrency(effectiveHourlyRate);
-  const currentPercentageDisplay = status !== 'idle' && currentShift && settings ? calculateShiftEarnings(currentShift as any, settings, true).finalTotalPercentage : 0;
+  
+  // Calculate currentPercentageDisplay only if shift is active and settings are available
+  let currentPercentageDisplay = 0;
+  if (status !== 'idle' && currentShift && currentShift.startTime && settings) {
+    // Ensure currentShift is treated as a full Shift object for calculation
+    const tempShiftForPercentage: Shift = {
+      id: currentShift.id || 'temp',
+      startTime: currentShift.startTime,
+      endTime: Date.now(), // For live percentage
+      breaks: currentShift.breaks || [],
+      baseWageAtStart: currentShift.baseWageAtStart || settings.baseWage,
+    };
+    currentPercentageDisplay = calculateShiftEarnings(tempShiftForPercentage, settings, true).finalTotalPercentage;
+  }
 
 
   return (
@@ -80,7 +96,7 @@ export default function DashboardPage() {
               </p>
               <div className="text-xs text-muted-foreground mt-1 space-x-2">
                 <span>Base: {baseWageDisplay}/hr</span>
-                {status !== 'idle' && (
+                {status !== 'idle' && currentShift?.startTime && (
                   <span>Current: {currentPercentageDisplay}% ({currentRateDisplay}/hr)</span>
                 )}
               </div>
@@ -112,7 +128,7 @@ export default function DashboardPage() {
                 </>
               )}
             </div>
-             {status !== 'idle' && (
+             {status !== 'idle' && currentShift?.startTime && ( // Only show reset if a shift is active
                <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="ghost" size="sm" className="w-full mt-2 text-muted-foreground">
@@ -141,3 +157,5 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+    
