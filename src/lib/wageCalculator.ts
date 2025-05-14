@@ -11,24 +11,28 @@ const SECONDS_IN_HOUR = 3600;
  */
 export function getEffectiveHourlyRate(dateTime: Date, settings: AppSettings): { rate: number, percentage: number } {
   const baseWage = settings.baseWage;
-  const dayOfWeek = ALL_DAYS[dateTime.getDay()];
+  const dayOfWeek = ALL_DAYS[dateTime.getDay()]; // 0 = Sunday, 1 = Monday, etc.
   
   // Day allowance percentage (e.g., 100 for 100%, 200 for 200%)
   const dayAllowancePercent = settings.dayAllowances[dayOfWeek] || 100;
 
   // Find applicable hourly allowance percentage (additive bonus)
   let hourlyBonusPercent = 0;
-  const currentTime = `${dateTime.getHours().toString().padStart(2, '0')}:${dateTime.getMinutes().toString().padStart(2, '0')}`;
+  const currentHour = dateTime.getHours();
+  const currentMinute = dateTime.getMinutes();
+  const currentTimeInMinutes = currentHour * 60 + currentMinute;
 
   for (const ha of settings.hourlyAllowances) {
-    if (currentTime >= ha.startTime && currentTime <= ha.endTime) {
-      hourlyBonusPercent = Math.max(hourlyBonusPercent, ha.percentage); // Take the highest applicable hourly bonus
+    const allowanceStartMinutes = parseInt(ha.startTime.split(':')[0]) * 60 + parseInt(ha.startTime.split(':')[1]);
+    const allowanceEndMinutes = parseInt(ha.endTime.split(':')[0]) * 60 + parseInt(ha.endTime.split(':')[1]);
+    
+    // Assuming allowances do not cross midnight (startTime < endTime as per schema)
+    // The end time for allowances is exclusive (e.g., 17:00-18:00 means up to 17:59)
+    if (currentTimeInMinutes >= allowanceStartMinutes && currentTimeInMinutes < allowanceEndMinutes) {
+      hourlyBonusPercent = Math.max(hourlyBonusPercent, ha.percentage); 
     }
   }
   
-  // Total percentage: Day's base rate + hourly bonus
-  // E.g., Sunday 200% (dayAllowancePercent = 200) and Evening +25% (hourlyBonusPercent = 25)
-  // Total = 200% (from day) + 25% (hourly bonus) = 225%
   const totalPercentage = dayAllowancePercent + hourlyBonusPercent;
   const effectiveRate = baseWage * (totalPercentage / 100);
   
@@ -38,7 +42,7 @@ export function getEffectiveHourlyRate(dateTime: Date, settings: AppSettings): {
 
 /**
  * Calculates total earnings for a given shift.
- * This version iterates minute by minute for accuracy with changing rates.
+ * This version iterates minute by minute for accuracy with changing rates and scheduled breaks.
  * @param shift The shift details.
  * @param settings The application settings.
  * @param isLiveCalculation If true, calculates up to 'now' for an ongoing shift.
@@ -51,33 +55,54 @@ export function calculateShiftEarnings(shift: Shift, settings: AppSettings, isLi
   let totalEarnings = 0;
   let currentRateInfo = { rate: 0, percentage: 0 };
 
-  // Iterate minute by minute from shift start to end
   for (let t = shift.startTime; t < endTime; t += 60000) { // 60000 ms = 1 minute
-    const currentTime = new Date(t);
+    const currentTimeIter = new Date(t);
     
-    // Check if current minute is within a break
     let onBreak = false;
+    
+    // 1. Check manual breaks from shift.breaks
     for (const br of shift.breaks) {
       const breakStartTime = br.startTime;
-      const breakEndTime = isLiveCalculation && !br.endTime && br.startTime === shift.breaks[shift.breaks.length-1]?.startTime ? Date.now() : (br.endTime || Date.now());
+      const breakEndTime = (isLiveCalculation && !br.endTime && br.startTime === shift.breaks[shift.breaks.length-1]?.startTime) 
+                           ? Date.now() 
+                           : (br.endTime || t); // Use 't' if endTime is missing and not live, to cap at current iteration
+
       if (t >= breakStartTime && t < breakEndTime) {
         onBreak = true;
         break;
       }
     }
 
+    // 2. If not on a manual break, check applicable scheduled breaks from settings
     if (!onBreak) {
-      currentRateInfo = getEffectiveHourlyRate(currentTime, settings);
+      const currentDayOfWeek = ALL_DAYS[currentTimeIter.getDay()];
+      const currentIterHour = currentTimeIter.getHours();
+      const currentIterMinute = currentTimeIter.getMinutes();
+      const currentIterTimeInMinutes = currentIterHour * 60 + currentIterMinute;
+
+      for (const sb of settings.scheduledBreaks) {
+        if (sb.days.includes(currentDayOfWeek)) {
+          const scheduledStartMinutes = parseInt(sb.startTime.split(':')[0]) * 60 + parseInt(sb.startTime.split(':')[1]);
+          const scheduledEndMinutes = parseInt(sb.endTime.split(':')[0]) * 60 + parseInt(sb.endTime.split(':')[1]);
+
+          // Assuming scheduled breaks do not cross midnight (startTime < endTime as per schema)
+          // The end time for scheduled breaks is exclusive
+          if (currentIterTimeInMinutes >= scheduledStartMinutes && currentIterTimeInMinutes < scheduledEndMinutes) {
+            onBreak = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!onBreak) {
+      currentRateInfo = getEffectiveHourlyRate(currentTimeIter, settings);
       totalEarnings += currentRateInfo.rate / 60; // Earnings for one minute
     }
   }
   
-  // If it's a live calculation, the finalEffectiveRate is the rate right now.
-  // Otherwise, if the shift is ended, it might be less relevant or could be an average.
-  // For simplicity, let's use the rate at the very end of the calculation period (or now for live).
-  const finalRateMoment = new Date(endTime - 1); // moment just before end
+  const finalRateMoment = new Date(Math.max(shift.startTime, endTime - 1)); // Ensure finalRateMoment is not before startTime
   const finalRateDetails = getEffectiveHourlyRate(finalRateMoment, settings);
-
 
   return { 
     totalEarnings: parseFloat(totalEarnings.toFixed(2)), 
