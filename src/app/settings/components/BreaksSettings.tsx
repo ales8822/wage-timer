@@ -1,3 +1,4 @@
+
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -16,12 +17,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useEffect } from "react";
 
 const scheduledBreakSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().optional(), // ID from react-hook-form's useFieldArray, not the break's actual data ID from context initially
   name: z.string().optional(),
   startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid start time (HH:MM)"),
   endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid end time (HH:MM)"),
   days: z.array(z.enum(ALL_DAYS)).min(1, "Select at least one day."),
-}).refine(data => data.startTime < data.endTime, { // Basic check, doesn't handle midnight crossing.
+}).refine(data => data.startTime < data.endTime, { 
   message: "End time must be after start time.",
   path: ["endTime"],
 });
@@ -33,46 +34,63 @@ const breaksSchema = z.object({
 type BreaksFormValues = z.infer<typeof breaksSchema>;
 
 export function BreaksSettings() {
-  const { settings, addScheduledBreak, updateScheduledBreak, removeScheduledBreak, isLoading } = useSettings();
+  const { settings, replaceAllScheduledBreaks, isLoading } = useSettings();
   const { toast } = useToast();
 
   const form = useForm<BreaksFormValues>({
     resolver: zodResolver(breaksSchema),
+    // Default values are critical. `id` here is for useFieldArray.
+    // The actual data from settings.scheduledBreaks doesn't need to map its `id` to the form's `id` field.
     defaultValues: {
-      scheduled_breaks: settings.scheduledBreaks,
+      scheduled_breaks: settings.scheduledBreaks.map(sb => ({
+        ...sb, // spread all properties from the stored break
+        id: sb.id, // explicitly use the stored break's id for react-hook-form's field `id` initially if desired, or let useFieldArray manage its own
+      })),
     },
   });
 
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "scheduled_breaks",
+    keyName: "fieldId", // use "fieldId" as the key name for useFieldArray, to avoid conflict with our data "id"
   });
 
   useEffect(() => {
     if (!isLoading) {
-      form.reset({ scheduled_breaks: settings.scheduledBreaks });
+      // Reset form with values from context, ensuring `id` field for useFieldArray is handled correctly
+      // `settings.scheduledBreaks` items have `id`, `name`, `startTime`, etc.
+      // The form schema also has `id`. We map settings to the form shape.
+      form.reset({ 
+        scheduled_breaks: settings.scheduledBreaks.map(sb => ({
+          id: sb.id, // This is the data ID, which RHF might also use for its own key if not careful
+          name: sb.name,
+          startTime: sb.startTime,
+          endTime: sb.endTime,
+          days: sb.days,
+        })) 
+      });
     }
   }, [settings.scheduledBreaks, isLoading, form]);
 
   const onSubmit = (data: BreaksFormValues) => {
-    // Similar to hourly allowances, for simplicity, replace all.
-    // A more robust solution would diff and call add/update/remove context functions.
-    settings.scheduledBreaks.forEach(sb => removeScheduledBreak(sb.id));
-    data.scheduled_breaks.forEach(sb => {
-      const newBreak: Omit<ScheduledBreak, 'id'> = {
-        name: sb.name,
-        startTime: sb.startTime,
-        endTime: sb.endTime,
-        days: sb.days,
-      };
-      addScheduledBreak(newBreak);
-    });
+    // `data.scheduled_breaks` contains the current form state, including user edits.
+    // Each item in `data.scheduled_breaks` is of type `scheduledBreakSchema`.
+    // We only need to pass the data relevant for creating new ScheduledBreak objects.
+    const newBreaksToSave = data.scheduled_breaks.map(sb_form_item => ({
+      name: sb_form_item.name,
+      startTime: sb_form_item.startTime,
+      endTime: sb_form_item.endTime,
+      days: sb_form_item.days,
+      // The `id` from sb_form_item is react-hook-form's field id, not needed for saving data
+    }));
+
+    replaceAllScheduledBreaks(newBreaksToSave);
     
     toast({
       title: "Settings Saved",
       description: "Scheduled breaks have been updated.",
     });
-    form.reset({ scheduled_breaks: data.scheduled_breaks.map(sb => ({...sb, id: sb.id || Date.now().toString() })) });
+    // No explicit form.reset() here; useEffect will sync the form once settings propagate.
   };
 
   if (isLoading) return <p>Loading breaks settings...</p>;
@@ -86,8 +104,8 @@ export function BreaksSettings() {
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)}>
           <CardContent className="space-y-6">
-            {fields.map((item, index) => (
-              <div key={item.id} className="p-4 border rounded-md space-y-4 relative">
+            {fields.map((item, index) => ( // item.fieldId is the key for mapping
+              <div key={item.fieldId} className="p-4 border rounded-md space-y-4 relative">
                 <Button
                   type="button"
                   variant="ghost"
@@ -179,6 +197,16 @@ export function BreaksSettings() {
                     </FormItem>
                   )}
                 />
+                 {form.formState.errors.scheduled_breaks?.[index]?.root?.message && (
+                  <p className="text-sm font-medium text-destructive">
+                    {form.formState.errors.scheduled_breaks[index]?.root?.message}
+                  </p>
+                )}
+                 {form.formState.errors.scheduled_breaks?.[index]?.endTime?.message && (
+                  <p className="text-sm font-medium text-destructive">
+                    End Time: {form.formState.errors.scheduled_breaks[index]?.endTime?.message}
+                  </p>
+                )}
               </div>
             ))}
             <Button

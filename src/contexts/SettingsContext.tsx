@@ -1,3 +1,4 @@
+
 "use client";
 
 import type { ReactNode } from 'react';
@@ -28,9 +29,10 @@ interface SettingsContextType {
   addHourlyAllowance: (allowance: Omit<HourlyAllowance, 'id'>) => void;
   updateHourlyAllowance: (allowance: HourlyAllowance) => void;
   removeHourlyAllowance: (id: string) => void;
-  addScheduledBreak: (sBreak: Omit<ScheduledBreak, 'id'>) => void;
-  updateScheduledBreak: (sBreak: ScheduledBreak) => void;
-  removeScheduledBreak: (id: string) => void;
+  replaceAllScheduledBreaks: (breaks: Array<Omit<ScheduledBreak, 'id'>>) => void; // New
+  addScheduledBreak: (sBreak: Omit<ScheduledBreak, 'id'>) => void; // Kept for potential other uses, but BreakSettings will use replaceAll
+  updateScheduledBreak: (sBreak: ScheduledBreak) => void; // Kept for potential other uses
+  removeScheduledBreak: (id: string) => void; // Kept for potential other uses
   isLoading: boolean;
 }
 
@@ -81,6 +83,18 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
   
+  const replaceAllScheduledBreaks = (newBreaksData: Array<Omit<ScheduledBreak, 'id'>>) => {
+    const newScheduledBreaks = newBreaksData.map(b => ({
+      ...b,
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 9), // More unique ID
+    }));
+    setSettings(prev => ({
+      ...prev,
+      scheduledBreaks: newScheduledBreaks,
+    }));
+  };
+
+  // Kept for backward compatibility or other potential direct uses, though replaceAllScheduledBreaks is preferred from form.
   const addScheduledBreak = (sBreak: Omit<ScheduledBreak, 'id'>) => {
     setSettings(prev => ({
       ...prev,
@@ -110,6 +124,7 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
       addHourlyAllowance,
       updateHourlyAllowance,
       removeHourlyAllowance,
+      replaceAllScheduledBreaks,
       addScheduledBreak,
       updateScheduledBreak,
       removeScheduledBreak,
