@@ -1,8 +1,7 @@
-
 "use client";
 
 import type { ReactNode } from 'react';
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type { Shift, BreakRecord, AppSettings, ScheduledBreak, RateSegment, DayOfWeek, ActiveShift } from '@/types';
 import { useSettings } from './SettingsContext';
 import { useWorkHistory } from './WorkHistoryContext';
@@ -55,6 +54,21 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(null);
 
+  const [toastInfo, setToastInfo] = useState<{ title: string; description: string; variant?: "default" | "destructive" } | null>(null);
+
+  const currentShiftRef = useRef(currentShift);
+  useEffect(() => {
+    currentShiftRef.current = currentShift;
+  }, [currentShift]);
+
+
+  useEffect(() => {
+    if (toastInfo) {
+      toast(toastInfo);
+      setToastInfo(null); // Reset after showing
+    }
+  }, [toastInfo, toast]);
+
   useEffect(() => {
     if (settingsLoading) return;
 
@@ -74,7 +88,7 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
             const expectedBreakEndTime = activeBreakRecord.startTime + persistedShift.activeScheduledBreakInfo.originalDurationSeconds * 1000;
             const remainingCountdown = Math.max(0, Math.floor((expectedBreakEndTime - now) / 1000));
             setScheduledBreakCountdown(remainingCountdown);
-        } else if (persistedShift.activeScheduledBreakInfo) { // Fallback if break record not found but info exists
+        } else if (persistedShift.activeScheduledBreakInfo) { 
              setScheduledBreakCountdown(persistedShift.activeScheduledBreakInfo.originalDurationSeconds);
         }
       }
@@ -91,23 +105,14 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
       } else {
         localStorage.removeItem(ACTIVE_SHIFT_STORAGE_KEY);
         localStorage.removeItem(ACTIVE_STATUS_STORAGE_KEY);
-        // Don't remove UNUSED_BREAK_TIME_STORAGE_KEY here if shift just ended,
-        // it will be cleared by endShift or when a new shift/break starts
       }
     }
   }, [currentShift, status, isLoading, settingsLoading, lastUnusedScheduledBreakTime]);
 
   const checkAndTriggerScheduledBreaks = useCallback(() => {
-    if (status !== 'working' || !currentShift?.startTime || !settings.scheduledBreaks.length) return;
+    if (status !== 'working' || !currentShiftRef.current?.startTime || !settings.scheduledBreaks.length) return;
 
     const now = new Date();
-    const currentDay = ALL_DAYS[now.getDay() === 0 ? 6 : now.getDay() -1 ] as DayOfWeek; // Corrected: getDay() is Sun=0..Sat=6. Our ALL_DAYS is Sun..Sat.
-                                                                                          // Let's keep ALL_DAYS as 0=Sunday .. 6=Saturday
-                                                                                          // const currentDay = ALL_DAYS[now.getDay()] as DayOfWeek;
-                                                                                          // No, the original definition of ALL_DAYS starts with Sunday.
-                                                                                          // And settings.scheduledBreaks[x].days contains "Sunday", "Monday" etc.
-                                                                                          // So ALL_DAYS[now.getDay()] is correct.
-    
     const currentDayName = ALL_DAYS[now.getDay()];
     const currentTimeMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -118,12 +123,12 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
       const breakEndMinutes = parseInt(sb.endTime.split(':')[0]) * 60 + parseInt(sb.endTime.split(':')[1]);
 
       if (currentTimeMinutes >= breakStartMinutes && currentTimeMinutes < breakEndMinutes) {
-        const alreadyTookThisBreak = currentShift.breaks?.some(
+        const alreadyTookThisBreak = currentShiftRef.current.breaks?.some(
           b => b.isScheduled && b.scheduledBreakId === sb.id
         );
         if (alreadyTookThisBreak) continue;
         
-        if (currentShift.activeScheduledBreakInfo && currentShift.activeScheduledBreakInfo.id === sb.id) continue;
+        if (currentShiftRef.current.activeScheduledBreakInfo && currentShiftRef.current.activeScheduledBreakInfo.id === sb.id) continue;
 
         const breakDurationSeconds = (breakEndMinutes - breakStartMinutes) * 60;
         if (breakDurationSeconds <= 0) continue;
@@ -154,25 +159,25 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
         
         setStatus('on_scheduled_break');
         setScheduledBreakCountdown(breakDurationSeconds);
-        setLastUnusedScheduledBreakTime(0); // Reset any previous unused time when a new scheduled break starts
-        setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); // also clear from storage
-        toast({ title: "Scheduled Break Started", description: `${sb.name || 'Break'} has begun. Duration: ${formatTime(breakDurationSeconds)}` });
+        setLastUnusedScheduledBreakTime(0); 
+        setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); 
+        setToastInfo({ title: "Scheduled Break Started", description: `${sb.name || 'Break'} has begun. Duration: ${formatTime(breakDurationSeconds)}` });
         return; 
       }
     }
-  }, [status, currentShift, settings.scheduledBreaks, toast]); 
+  }, [status, settings.scheduledBreaks, setToastInfo, setCurrentShift, setStatus, setScheduledBreakCountdown, setLastUnusedScheduledBreakTime]);
 
 
   const calculateCurrentTimersAndEarnings = useCallback(() => {
-    if (isLoading || settingsLoading || !currentShift?.startTime) return;
+    if (isLoading || settingsLoading || !currentShiftRef.current?.startTime) return;
 
     const nowMs = Date.now();
     let tempShiftForCalc: Shift = {
-      id: currentShift.id || 'temp_live_calc',
-      startTime: currentShift.startTime,
+      id: currentShiftRef.current.id || 'temp_live_calc',
+      startTime: currentShiftRef.current.startTime,
       endTime: nowMs,
-      breaks: currentShift.breaks || [],
-      baseWageAtStart: currentShift.baseWageAtStart || settings.baseWage,
+      breaks: currentShiftRef.current.breaks || [],
+      baseWageAtStart: currentShiftRef.current.baseWageAtStart || settings.baseWage,
     };
     
     const { totalEarnings, finalEffectiveRate } = calculateShiftEarnings(tempShiftForCalc, settings, true);
@@ -180,20 +185,20 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     setEffectiveHourlyRate(finalEffectiveRate);
 
     let totalManualBreakDurationMs = 0;
-    (currentShift.breaks || []).forEach(br => {
+    (currentShiftRef.current.breaks || []).forEach(br => {
       if (!br.isScheduled) { 
         const breakStartTime = br.startTime;
-        const breakEndTime = br.endTime || (status === 'on_break' && currentShift.breaks?.length && br.startTime === currentShift.breaks[currentShift.breaks.length - 1]?.startTime ? nowMs : 0);
+        const breakEndTime = br.endTime || (status === 'on_break' && currentShiftRef.current.breaks?.length && br.startTime === currentShiftRef.current.breaks[currentShiftRef.current.breaks.length - 1]?.startTime ? nowMs : 0);
         if (breakEndTime > breakStartTime) {
           totalManualBreakDurationMs += breakEndTime - breakStartTime;
         }
       }
     });
-    const grossWorkTimeMs = nowMs - currentShift.startTime;
+    const grossWorkTimeMs = nowMs - currentShiftRef.current.startTime;
     setElapsedWorkTime(Math.max(0, Math.floor((grossWorkTimeMs - totalManualBreakDurationMs) / 1000)));
 
     if (status === 'on_break') {
-      const activeManualBreak = currentShift.breaks?.find(b => !b.isScheduled && !b.endTime);
+      const activeManualBreak = currentShiftRef.current.breaks?.find(b => !b.isScheduled && !b.endTime);
       if (activeManualBreak) {
         setElapsedBreakTime(Math.floor((nowMs - activeManualBreak.startTime) / 1000));
       }
@@ -207,25 +212,27 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
             const newCountdown = Math.max(0, prevCountdown - 1);
 
             if (newCountdown === 0) { 
-                const breakName = currentShift.activeScheduledBreakInfo?.name || "Scheduled break";
+                const activeBreakInfo = currentShiftRef.current?.activeScheduledBreakInfo;
+                const breakName = activeBreakInfo?.name || "Scheduled break";
                 const breakEndTime = Date.now();
-                setCurrentShift(prevShift => {
-                    if (!prevShift) return null;
-                    const updatedBreaks = (prevShift.breaks || []).map(b =>
-                        (b.isScheduled && b.scheduledBreakId === prevShift.activeScheduledBreakInfo?.id && !b.endTime)
+                
+                setCurrentShift(prevCs => {
+                    if (!prevCs) return null;
+                    const updatedBreaks = (prevCs.breaks || []).map(b =>
+                        (b.isScheduled && b.scheduledBreakId === activeBreakInfo?.id && !b.endTime)
                         ? { ...b, endTime: breakEndTime } 
                         : b
                     );
-                    return { ...prevShift, breaks: updatedBreaks, activeScheduledBreakInfo: undefined };
+                    return { ...prevCs, breaks: updatedBreaks, activeScheduledBreakInfo: undefined };
                 });
                 setStatus('working'); 
-                toast({ title: "Scheduled Break Ended", description: `${breakName} has finished.` });
+                setToastInfo({ title: "Scheduled Break Ended", description: `${breakName} has finished.` });
                 return null; 
             }
             return newCountdown;
         });
     }
-  }, [isLoading, settingsLoading, currentShift, settings, status, toast]); 
+  }, [isLoading, settingsLoading, settings, status, setToastInfo, setCurrentShift, setStatus, setScheduledBreakCountdown]);
 
 
   useEffect(() => {
@@ -258,16 +265,17 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
         clearInterval(timerInterval);
         setTimerInterval(null);
       }
-      if (!currentShift) { 
+      if (!currentShiftRef.current) { 
         setElapsedWorkTime(0);
         setElapsedBreakTime(0);
         setCurrentEarnings(0);
         setEffectiveHourlyRate(0);
         setScheduledBreakCountdown(null);
-        // Do not clear lastUnusedScheduledBreakTime here, allow it to persist until endShift or new break.
       }
     }
-  }, [status, isLoading, settingsLoading, currentShift, calculateCurrentTimersAndEarnings, checkAndTriggerScheduledBreaks]);
+  // currentShift is implicitly handled by currentShiftRef for stability within callbacks
+  // We depend on the callbacks themselves which now have stable dependencies or use refs
+  }, [status, isLoading, settingsLoading, calculateCurrentTimersAndEarnings, checkAndTriggerScheduledBreaks]);
 
 
   const startShift = () => {
@@ -285,15 +293,15 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     setElapsedBreakTime(0);
     setCurrentEarnings(0);
     setScheduledBreakCountdown(null);
-    setLastUnusedScheduledBreakTime(0); // Clear any previous unused time
-    setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); // also clear from storage
+    setLastUnusedScheduledBreakTime(0); 
+    setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); 
     toast({ title: "Shift Started", description: "Your work shift has begun." });
   };
 
   const endShift = () => {
-    if (status === 'idle' || !currentShift?.startTime || isLoading || settingsLoading) return;
+    if (status === 'idle' || !currentShiftRef.current?.startTime || isLoading || settingsLoading) return;
 
-    let finalShiftProto = { ...currentShift };
+    let finalShiftProto = { ...currentShiftRef.current };
     const now = Date.now();
     finalShiftProto.endTime = now;
     finalShiftProto.baseWageAtStart = finalShiftProto.baseWageAtStart || settings.baseWage;
@@ -307,7 +315,7 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     
     const shiftForCalc: Shift = {
         id: finalShiftProto.id || `shift_${Date.now()}_err`,
-        startTime: finalShiftProto.startTime,
+        startTime: finalShiftProto.startTime!, // startTime is checked above
         endTime: finalShiftProto.endTime,
         breaks: finalShiftProto.breaks || [],
         baseWageAtStart: finalShiftProto.baseWageAtStart,
@@ -328,12 +336,12 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     setStatus('idle');
     setCurrentShift(null); 
     setLastUnusedScheduledBreakTime(0); 
-    setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); // Clear from storage
+    setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, 0); 
     toast({ title: "Shift Ended", description: `Earnings: ${formatCurrency(totalEarnings)}.` });
   };
 
   const startManualBreak = () => {
-    if (status !== 'working' || !currentShift || isLoading || settingsLoading) return;
+    if (status !== 'working' || !currentShiftRef.current || isLoading || settingsLoading) return;
     const newBreak: BreakRecord = { startTime: Date.now(), isScheduled: false };
     setCurrentShift(prev => {
       if (!prev) return null;
@@ -345,7 +353,7 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const endManualBreak = () => {
-    if (status !== 'on_break' || !currentShift || !currentShift.breaks?.length || isLoading || settingsLoading) return;
+    if (status !== 'on_break' || !currentShiftRef.current || !currentShiftRef.current.breaks?.length || isLoading || settingsLoading) return;
     const breakEndTime = Date.now();
     setCurrentShift(prev => {
       if (!prev || !prev.breaks) return prev;
@@ -359,14 +367,15 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
   };
   
   const endScheduledBreakEarly = () => {
-    if (status !== 'on_scheduled_break' || !currentShift?.activeScheduledBreakInfo || scheduledBreakCountdown === null || isLoading || settingsLoading) return;
+    if (status !== 'on_scheduled_break' || !currentShiftRef.current?.activeScheduledBreakInfo || scheduledBreakCountdown === null || isLoading || settingsLoading) return;
 
-    const breakName = currentShift.activeScheduledBreakInfo.name || "Scheduled break";
+    const breakName = currentShiftRef.current.activeScheduledBreakInfo.name || "Scheduled break";
     const remainingTime = scheduledBreakCountdown; 
     
     if (remainingTime > 0) {
-      setLastUnusedScheduledBreakTime(prev => prev + remainingTime);
-      setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, lastUnusedScheduledBreakTime + remainingTime); // Update storage
+      const newUnusedTime = lastUnusedScheduledBreakTime + remainingTime;
+      setLastUnusedScheduledBreakTime(newUnusedTime);
+      setToLocalStorage(UNUSED_BREAK_TIME_STORAGE_KEY, newUnusedTime); 
       toast({ title: "Scheduled Break Ended Early", description: `${breakName} ended. You have ${formatTime(remainingTime)} of unused time.` });
     } else {
       toast({ title: "Scheduled Break Ended", description: `${breakName} has finished.` });
@@ -375,8 +384,9 @@ export const TimerProvider = ({ children }: { children: ReactNode }) => {
     const breakEndTime = Date.now();
     setCurrentShift(prev => {
       if (!prev || !prev.activeScheduledBreakInfo) return prev; 
+      const activeBreakId = prev.activeScheduledBreakInfo.id;
       const updatedBreaks = (prev.breaks || []).map(b => 
-        (b.isScheduled && b.scheduledBreakId === prev.activeScheduledBreakInfo!.id && !b.endTime) 
+        (b.isScheduled && b.scheduledBreakId === activeBreakId && !b.endTime) 
         ? { ...b, endTime: breakEndTime } 
         : b
       );
@@ -430,3 +440,4 @@ export const useTimer = (): TimerContextType => {
   }
   return context;
 };
+
