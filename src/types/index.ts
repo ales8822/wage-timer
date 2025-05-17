@@ -1,3 +1,4 @@
+
 export type DayOfWeek = 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
 
 export const ALL_DAYS: DayOfWeek[] = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -33,6 +34,8 @@ export interface BreakRecord {
   startTime: number; // timestamp
   endTime?: number; // timestamp
   isScheduled: boolean; // To differentiate manual vs scheduled breaks
+  scheduledBreakId?: string; // Link to the ScheduledBreak id from settings
+  scheduledBreakName?: string; // Name of the scheduled break
 }
 
 export interface RateSegment {
@@ -48,5 +51,15 @@ export interface Shift {
   totalEarnings?: number;
   baseWageAtStart: number;
   rateSegments?: RateSegment[]; // Breakdown of work by rate
-  // Optionally, store effective allowances for review, or recompute on display
+}
+
+// Specific type for the active shift being managed by TimerContext
+export interface ActiveShift extends Partial<Shift> {
+  activeScheduledBreakInfo?: {
+    id: string; // ID of the ScheduledBreak from settings
+    name?: string;
+    originalDurationSeconds: number;
+    scheduledStartTime: string; // "HH:MM" - Original start time from settings
+    scheduledEndTime: string;   // "HH:MM" - Original end time from settings
+  };
 }
