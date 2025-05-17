@@ -7,25 +7,29 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { useTimer } from '@/contexts/TimerContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { formatTime, formatCurrency, formatShortTime } from '@/lib/utils';
-import { Play, Square, Pause, RotateCcw } from 'lucide-react';
+import { Play, Square, Pause, RotateCcw, AlertCircle } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { calculateShiftEarnings } from '@/lib/wageCalculator'; // Ensure this is imported
-import type { Shift } from '@/types'; // Ensure Shift type is imported
+import type { Shift } from '@/types'; 
+import { calculateShiftEarnings } from '@/lib/wageCalculator';
+
 
 export default function DashboardPage() {
   const { 
     status, 
     currentShift, 
     elapsedWorkTime, 
-    elapsedBreakTime, 
+    elapsedBreakTime, // This is for manual breaks
+    scheduledBreakCountdown,
+    lastUnusedScheduledBreakTime,
     currentEarnings,
     effectiveHourlyRate,
     startShift, 
     endShift, 
-    startBreak, 
-    endBreak,
+    startManualBreak, 
+    endManualBreak,
+    endScheduledBreakEarly,
     resetActiveShift,
-    isLoading: timerLoading, // Renamed to avoid conflict
+    isLoading: timerLoading,
   } = useTimer();
   const { settings, isLoading: settingsLoading } = useSettings();
 
@@ -45,20 +49,45 @@ export default function DashboardPage() {
   }
   
   const baseWageDisplay = formatCurrency(settings.baseWage);
-  const currentRateDisplay = formatCurrency(effectiveHourlyRate);
-  
-  // Calculate currentPercentageDisplay only if shift is active and settings are available
+  let currentRateDisplay = formatCurrency(effectiveHourlyRate);
   let currentPercentageDisplay = 0;
+
   if (status !== 'idle' && currentShift && currentShift.startTime && settings) {
-    // Ensure currentShift is treated as a full Shift object for calculation
     const tempShiftForPercentage: Shift = {
       id: currentShift.id || 'temp',
       startTime: currentShift.startTime,
-      endTime: Date.now(), // For live percentage
+      endTime: Date.now(), 
       breaks: currentShift.breaks || [],
       baseWageAtStart: currentShift.baseWageAtStart || settings.baseWage,
+      activeScheduledBreakInfo: currentShift.activeScheduledBreakInfo,
     };
-    currentPercentageDisplay = calculateShiftEarnings(tempShiftForPercentage, settings, true).finalTotalPercentage;
+    const earningsDetails = calculateShiftEarnings(tempShiftForPercentage, settings, true);
+    currentPercentageDisplay = earningsDetails.finalTotalPercentage;
+    // Re-calculate effectiveHourlyRate for display based on the latest percentage
+    currentRateDisplay = formatCurrency(settings.baseWage * (currentPercentageDisplay / 100));
+
+  }
+
+
+  let cardTitleText = "Ready to Work?";
+  let timerLabelText = "Session Timer";
+  let timerDisplayValue = status === 'idle' ? 0 : elapsedWorkTime;
+
+  if (status === 'working') {
+    cardTitleText = "Work in Progress";
+    timerLabelText = "Time Worked";
+    timerDisplayValue = elapsedWorkTime;
+  } else if (status === 'on_break') { // Manual break
+    cardTitleText = "On Manual Break";
+    timerLabelText = "Manual Break Time";
+    timerDisplayValue = elapsedBreakTime;
+  } else if (status === 'on_scheduled_break') {
+    cardTitleText = `Scheduled Break: ${currentShift?.activeScheduledBreakInfo?.name || 'Active'}`;
+    timerLabelText = `${currentShift?.activeScheduledBreakInfo?.name || 'Scheduled Break'} Remaining`;
+    timerDisplayValue = scheduledBreakCountdown ?? 0;
+  } else if (status === 'idle' && currentShift) { // Ended shift, show final stats briefly if needed or just reset view
+    cardTitleText = "Shift Ended";
+    timerLabelText = "Last Session";
   }
 
 
@@ -69,23 +98,27 @@ export default function DashboardPage() {
         <Card className="w-full max-w-md shadow-xl">
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-bold">
-              {status === 'idle' && "Ready to Work?"}
-              {status === 'working' && "Work in Progress"}
-              {status === 'on_break' && "On Break"}
+              {cardTitleText}
             </CardTitle>
             {currentShift?.startTime && (
               <CardDescription>
                 Started at: {formatShortTime(currentShift.startTime)}
+                {status === 'on_break' && currentShift.breaks?.find(b => !b.endTime && !b.isScheduled) && 
+                  ` (Break started: ${formatShortTime(currentShift.breaks[currentShift.breaks.length-1].startTime)})`
+                }
+                {status === 'on_scheduled_break' && currentShift.activeScheduledBreakInfo && 
+                  ` (Scheduled break started: ${formatShortTime(currentShift.breaks.find(b => b.isScheduled && b.scheduledBreakId === currentShift.activeScheduledBreakInfo?.id && !b.endTime)?.startTime || Date.now())})`
+                }
               </CardDescription>
             )}
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="text-center">
               <p className="text-sm text-muted-foreground">
-                {status === 'working' ? "Time Worked" : status === 'on_break' ? "Break Time" : "Session Timer"}
+                {timerLabelText}
               </p>
               <p className="text-6xl font-bold tracking-tighter text-primary">
-                {status === 'on_break' ? formatTime(elapsedBreakTime) : formatTime(elapsedWorkTime)}
+                {formatTime(timerDisplayValue)}
               </p>
             </div>
 
@@ -96,11 +129,21 @@ export default function DashboardPage() {
               </p>
               <div className="text-xs text-muted-foreground mt-1 space-x-2">
                 <span>Base: {baseWageDisplay}/hr</span>
-                {status !== 'idle' && currentShift?.startTime && (
-                  <span>Current: {currentPercentageDisplay}% ({currentRateDisplay}/hr)</span>
+                {(status === 'working' || status === 'on_break' || status === 'on_scheduled_break') && currentShift?.startTime && (
+                  <span>Current Rate: {currentPercentageDisplay}% ({currentRateDisplay}/hr)</span>
                 )}
               </div>
             </div>
+            
+            {lastUnusedScheduledBreakTime > 0 && status !== 'on_scheduled_break' && (
+              <div className="p-3 mt-2 rounded-md border border-yellow-500 bg-yellow-50 dark:bg-yellow-900/30 text-center">
+                <div className="flex items-center justify-center text-sm text-yellow-700 dark:text-yellow-300">
+                  <AlertCircle className="h-4 w-4 mr-2" />
+                  <span>You have {formatTime(lastUnusedScheduledBreakTime)} of unused scheduled break time.</span>
+                </div>
+              </div>
+            )}
+
 
             <div className="grid grid-cols-2 gap-4 pt-4">
               {status === 'idle' && (
@@ -111,8 +154,8 @@ export default function DashboardPage() {
 
               {status === 'working' && (
                 <>
-                  <Button size="lg" variant="outline" onClick={startBreak}>
-                    <Pause className="mr-2 h-5 w-5" /> Take a Break
+                  <Button size="lg" variant="outline" onClick={startManualBreak}>
+                    <Pause className="mr-2 h-5 w-5" /> Take Manual Break
                   </Button>
                   <Button size="lg" onClick={endShift} variant="destructive">
                     <Square className="mr-2 h-5 w-5" /> End Shift
@@ -120,15 +163,29 @@ export default function DashboardPage() {
                 </>
               )}
 
-              {status === 'on_break' && (
+              {status === 'on_break' && ( // Manual break
                 <>
-                  <Button size="lg" onClick={endBreak} className="col-span-2 bg-blue-500 hover:bg-blue-600 text-white">
-                    <Play className="mr-2 h-5 w-5" /> End Break
+                  <Button size="lg" onClick={endManualBreak} className="bg-blue-500 hover:bg-blue-600 text-white">
+                    <Play className="mr-2 h-5 w-5" /> End Manual Break
+                  </Button>
+                  <Button size="lg" onClick={endShift} variant="destructive">
+                    <Square className="mr-2 h-5 w-5" /> End Shift
+                  </Button>
+                </>
+              )}
+
+              {status === 'on_scheduled_break' && (
+                 <>
+                  <Button size="lg" onClick={endScheduledBreakEarly} className="bg-orange-500 hover:bg-orange-600 text-white">
+                    <Play className="mr-2 h-5 w-5" /> End Scheduled Break Early
+                  </Button>
+                   <Button size="lg" onClick={endShift} variant="destructive">
+                    <Square className="mr-2 h-5 w-5" /> End Shift
                   </Button>
                 </>
               )}
             </div>
-             {status !== 'idle' && currentShift?.startTime && ( // Only show reset if a shift is active
+             {(status !== 'idle' && currentShift?.startTime) && (
                <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="ghost" size="sm" className="w-full mt-2 text-muted-foreground">
@@ -157,5 +214,4 @@ export default function DashboardPage() {
     </div>
   );
 }
-
     
