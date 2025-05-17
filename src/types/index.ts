@@ -51,6 +51,7 @@ export interface Shift {
   totalEarnings?: number;
   baseWageAtStart: number;
   rateSegments?: RateSegment[]; // Breakdown of work by rate
+  unusedScheduledBreakSeconds?: number; // Seconds of scheduled break time not used for this shift
 }
 
 // Specific type for the active shift being managed by TimerContext

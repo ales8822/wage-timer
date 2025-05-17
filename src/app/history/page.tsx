@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useWorkHistory } from '@/contexts/WorkHistoryContext';
@@ -7,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatCurrency, formatDateTime, formatShortTime, formatTime } from '@/lib/utils';
 import type { Shift } from '@/types';
 import { getWeek, format, startOfWeek, endOfWeek } from 'date-fns';
-import { Trash2, Briefcase, Info } from 'lucide-react';
+import { Trash2, Briefcase, Info, Coffee, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from '@/hooks/use-toast';
@@ -17,7 +18,7 @@ const groupShiftsByWeek = (shifts: Shift[]) => {
   const grouped: Record<string, { weekNumber: number; year: number; dateRange: string; shifts: Shift[]; totalHours: number; totalEarnings: number, weekKey: string }> = {};
   
   shifts.forEach(shift => {
-    if (!shift.startTime) return; // Should not happen for historical shifts
+    if (!shift.startTime) return; 
     const startDate = new Date(shift.startTime);
     const year = startDate.getFullYear();
     const weekNumber = getWeek(startDate, { weekStartsOn: 1 /* Monday */ });
@@ -32,27 +33,15 @@ const groupShiftsByWeek = (shifts: Shift[]) => {
         weekKey,
         dateRange: `${format(firstDayOfWeek, 'MMM d')} - ${format(lastDayOfWeek, 'MMM d, yyyy')}`,
         shifts: [],
-        totalHours: 0, // This will represent net paid hours for the week
+        totalHours: 0, 
         totalEarnings: 0,
       };
     }
     grouped[weekKey].shifts.push(shift);
     
-    // Calculate net paid duration for the shift
-    const shiftDurationMs = (shift.endTime || Date.now()) - shift.startTime;
-    let totalBreakDurationMs = shift.breaks.reduce((acc, b) => {
-        // If break has no end time (shouldn't happen for completed shifts, but as fallback for safety)
-        // assume it ended when shift ended or now for ongoing. Here, assume shift.endTime is present.
-        const breakEndTime = b.endTime || shift.endTime || Date.now();
-        return acc + (breakEndTime - b.startTime);
-    }, 0);
-    
-    // Note: This calculation of totalHours for the week summary doesn't automatically deduct scheduled breaks
-    // unless they were part of the shift.breaks array or if calculateShiftEarnings result was used.
-    // The `shift.rateSegments` duration sum would be the most accurate paid time.
     const netWorkDurationSeconds = shift.rateSegments 
       ? shift.rateSegments.reduce((sum, seg) => sum + seg.durationSeconds, 0)
-      : Math.max(0, (shiftDurationMs - totalBreakDurationMs) / 1000);
+      : 0;
 
     grouped[weekKey].totalHours += netWorkDurationSeconds / 3600;
     grouped[weekKey].totalEarnings += shift.totalEarnings || 0;
@@ -111,17 +100,24 @@ export default function WorkHistoryPage() {
           <AccordionContent className="px-6 pb-4 pt-0">
             <div className="space-y-3">
               {weekData.shifts.sort((a,b) => b.startTime - a.startTime).map(shift => {
-                if (!shift.startTime || !shift.endTime) return null; // Should not happen for history
+                if (!shift.startTime || !shift.endTime) return null; 
 
                 const totalShiftDurationMs = shift.endTime - shift.startTime;
                 const totalShiftDurationSeconds = Math.max(0, totalShiftDurationMs / 1000);
                 
                 const netPaidDurationSeconds = shift.rateSegments 
                   ? shift.rateSegments.reduce((sum, seg) => sum + seg.durationSeconds, 0)
-                  : 0; // Fallback, but rateSegments should exist
+                  : 0;
 
-                const totalManualBreakDurationMs = shift.breaks.reduce((acc, b) => {
-                    const breakEndTime = b.endTime || shift.endTime!; // Fallback to shift end
+                const manualBreaks = shift.breaks.filter(b => !b.isScheduled);
+                const totalManualBreakDurationMs = manualBreaks.reduce((acc, b) => {
+                    const breakEndTime = b.endTime || shift.endTime!; 
+                    return acc + Math.max(0, breakEndTime - b.startTime);
+                }, 0);
+
+                const scheduledBreaksTaken = shift.breaks.filter(b => b.isScheduled);
+                const totalScheduledBreakDurationMs = scheduledBreaksTaken.reduce((acc, b) => {
+                    const breakEndTime = b.endTime || shift.endTime!;
                     return acc + Math.max(0, breakEndTime - b.startTime);
                 }, 0);
                 
@@ -164,11 +160,23 @@ export default function WorkHistoryPage() {
                       <p>Total Shift Duration: {formatTime(totalShiftDurationSeconds)}</p>
                       <p>Net Paid Duration: {formatTime(netPaidDurationSeconds)}</p>
                       <p>Earnings: <span className="font-medium">{formatCurrency(shift.totalEarnings || 0)}</span></p>
-                       {shift.breaks.length > 0 && (
-                        <p className="text-xs text-muted-foreground">
-                          Manual Breaks: {shift.breaks.length} ({formatTime(totalManualBreakDurationMs / 1000)} total)
+                      
+                      {manualBreaks.length > 0 && (
+                        <p className="text-xs text-muted-foreground flex items-center">
+                           <User className="mr-1 h-3 w-3"/> Manual Breaks: {manualBreaks.length} ({formatTime(totalManualBreakDurationMs / 1000)} total)
                         </p>
                       )}
+                      {scheduledBreaksTaken.length > 0 && (
+                         <p className="text-xs text-muted-foreground flex items-center">
+                           <Coffee className="mr-1 h-3 w-3"/> Scheduled Breaks Taken: {scheduledBreaksTaken.length} ({formatTime(totalScheduledBreakDurationMs / 1000)} total)
+                         </p>
+                      )}
+                      {shift.unusedScheduledBreakSeconds && shift.unusedScheduledBreakSeconds > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                           Unused Scheduled Break: {formatTime(shift.unusedScheduledBreakSeconds)}
+                        </p>
+                      )}
+
                       {shift.rateSegments && shift.rateSegments.length > 0 && (
                         <Accordion type="single" collapsible className="w-full mt-2 text-xs">
                           <AccordionItem value={`rate-breakdown-${shift.id}`} className="border-none">
