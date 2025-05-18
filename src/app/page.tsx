@@ -18,7 +18,7 @@ export default function DashboardPage() {
     status, 
     currentShift, 
     elapsedWorkTime, 
-    elapsedBreakTime, // This is for manual breaks
+    elapsedBreakTime, 
     scheduledBreakCountdown,
     lastUnusedScheduledBreakTime,
     currentEarnings,
@@ -52,7 +52,7 @@ export default function DashboardPage() {
   let currentRateDisplay = formatCurrency(effectiveHourlyRate);
   let currentPercentageDisplay = 0;
 
-  if (status !== 'idle' && currentShift && currentShift.startTime && settings) {
+  if (status !== 'idle' && currentShift?.startTime && settings) {
     const tempShiftForPercentage: Shift = {
       id: currentShift.id || 'temp',
       startTime: currentShift.startTime,
@@ -63,9 +63,7 @@ export default function DashboardPage() {
     };
     const earningsDetails = calculateShiftEarnings(tempShiftForPercentage, settings, true);
     currentPercentageDisplay = earningsDetails.finalTotalPercentage;
-    // Re-calculate effectiveHourlyRate for display based on the latest percentage
     currentRateDisplay = formatCurrency(settings.baseWage * (currentPercentageDisplay / 100));
-
   }
 
 
@@ -77,15 +75,15 @@ export default function DashboardPage() {
     cardTitleText = "Work in Progress";
     timerLabelText = "Time Worked";
     timerDisplayValue = elapsedWorkTime;
-  } else if (status === 'on_break') { // Manual break
-    cardTitleText = "On Manual Break";
-    timerLabelText = "Manual Break Time";
+  } else if (status === 'on_break') { 
+    cardTitleText = "On Break";
+    timerLabelText = "Break Time";
     timerDisplayValue = elapsedBreakTime;
   } else if (status === 'on_scheduled_break') {
     cardTitleText = `Scheduled Break: ${currentShift?.activeScheduledBreakInfo?.name || 'Active'}`;
     timerLabelText = `${currentShift?.activeScheduledBreakInfo?.name || 'Scheduled Break'} Remaining`;
     timerDisplayValue = scheduledBreakCountdown ?? 0;
-  } else if (status === 'idle' && currentShift) { // Ended shift, show final stats briefly if needed or just reset view
+  } else if (status === 'idle' && currentShift) { 
     cardTitleText = "Shift Ended";
     timerLabelText = "Last Session";
   }
@@ -155,7 +153,7 @@ export default function DashboardPage() {
               {status === 'working' && (
                 <>
                   <Button size="lg" variant="outline" onClick={startManualBreak}>
-                    <Pause className="mr-2 h-5 w-5" /> Take Manual Break
+                    <Pause className="mr-2 h-5 w-5" /> Take Break
                   </Button>
                   <Button size="lg" onClick={endShift} variant="destructive">
                     <Square className="mr-2 h-5 w-5" /> End Shift
@@ -163,10 +161,10 @@ export default function DashboardPage() {
                 </>
               )}
 
-              {status === 'on_break' && ( // Manual break
+              {status === 'on_break' && ( 
                 <>
                   <Button size="lg" onClick={endManualBreak} className="bg-blue-500 hover:bg-blue-600 text-white">
-                    <Play className="mr-2 h-5 w-5" /> End Manual Break
+                    <Play className="mr-2 h-5 w-5" /> End Break
                   </Button>
                   <Button size="lg" onClick={endShift} variant="destructive">
                     <Square className="mr-2 h-5 w-5" /> End Shift
